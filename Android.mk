@@ -44,7 +44,7 @@ LOCAL_SRC_FILES := \
     twrp.cpp \
     fixContexts.cpp \
     twrpTar.cpp \
-    twrpDU.cpp \
+    exclude.cpp \
     twrpDigest.cpp \
     digest/md5.c \
     find_file.cpp \
@@ -124,7 +124,7 @@ LOCAL_STATIC_LIBRARIES :=
 LOCAL_SHARED_LIBRARIES :=
 
 LOCAL_STATIC_LIBRARIES += libguitwrp
-LOCAL_SHARED_LIBRARIES += libaosprecovery libz libc libcutils libstdc++ libtar libblkid libminuitwrp libminadbd libmtdutils libminzip libtwadbbu
+LOCAL_SHARED_LIBRARIES += libaosprecovery libz libc libcutils libstdc++ libtar libblkid libminuitwrp libminadbd libmtdutils libminzip libtwadbbu libbootloader_message
 LOCAL_SHARED_LIBRARIES += libcrecovery
 
 #MultiROM
@@ -192,6 +192,12 @@ ifeq ($(TWHAVE_SELINUX), true)
             LOCAL_STATIC_LIBRARIES += liblz4
         endif
     endif
+endif
+
+ifeq ($(AB_OTA_UPDATER),true)
+    LOCAL_CFLAGS += -DAB_OTA_UPDATER=1
+    LOCAL_SHARED_LIBRARIES += libhardware
+    LOCAL_ADDITIONAL_DEPENDENCIES += libhardware
 endif
 
 LOCAL_MODULE_PATH := $(TARGET_RECOVERY_ROOT_OUT)/sbin
@@ -309,6 +315,11 @@ ifeq ($(TW_INCLUDE_CRYPTO), true)
     LOCAL_CFLAGS += -DTW_INCLUDE_CRYPTO
     LOCAL_SHARED_LIBRARIES += libcryptfslollipop libgpt_twrp
     LOCAL_C_INCLUDES += external/boringssl/src/include
+    ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 24; echo $$?),0)
+        TW_INCLUDE_CRYPTO_FBE := true
+        LOCAL_CFLAGS += -DTW_INCLUDE_FBE
+        LOCAL_SHARED_LIBRARIES += libe4crypt
+    endif
 endif
 ifeq ($(TW_USE_MODEL_HARDWARE_ID_FOR_DEVICE_ID), true)
     LOCAL_CFLAGS += -DTW_USE_MODEL_HARDWARE_ID_FOR_DEVICE_ID
@@ -418,7 +429,7 @@ LOCAL_CFLAGS += -DTW_DEFAULT_ROTATION=0
     endif
 endif
 
-LOCAL_ADDITIONAL_DEPENDENCIES := \
+LOCAL_ADDITIONAL_DEPENDENCIES += \
     dump_image \
     erase_image \
     flash_image \
@@ -433,6 +444,7 @@ LOCAL_ADDITIONAL_DEPENDENCIES := \
     mkfs.fat \
     permissive.sh \
     simg2img_twrp \
+    libbootloader_message \
     init.recovery.service.rc
 
 #MultiROM
@@ -447,7 +459,8 @@ ifeq ($(TARGET_RECOVERY_IS_MULTIROM), true)
         ntfs-3g \
         cp_xattrs \
         ls_xattrs \
-        mount_shim.sh
+        mount_shim.sh \
+        umount_shim.sh
 endif
 
 ifneq ($(TARGET_ARCH), arm64)
@@ -564,6 +577,9 @@ include $(CLEAR_VARS)
 # Create busybox symlinks... gzip and gunzip are excluded because those need to link to pigz instead
 BUSYBOX_LINKS := $(shell cat external/busybox/busybox-full.links)
 exclude := tune2fs mke2fs mkdosfs mkfs.vfat gzip gunzip
+ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 24; echo $$?),0)
+    exclude += sh
+endif
 
 # Having /sbin/modprobe present on 32 bit devices with can cause a massive
 # performance problem if the kernel has CONFIG_MODULES=y
@@ -576,11 +592,15 @@ ifeq ($(shell test $(PLATFORM_SDK_VERSION) -gt 22; echo $$?),0)
 endif
 
 #MultiROM uses restorecon -D which is only available in toolbox
-ifeq ($(TARGET_RECOVERY_IS_MULTIROM), true)
-	ifeq ($(TWHAVE_SELINUX), true)
-		exclude += restorecon
-	endif
-endif
+# Update: This no longer works since restorecon has been moved to toybox,
+#         furthermore the existence of file_contexts and file_contexts.bin
+#         has made recovery based restorecon unreliable for secondary ROMs
+#         so instead opt for using the secondary ROM's own restorecon
+#ifeq ($(TARGET_RECOVERY_IS_MULTIROM), true)
+#	ifeq ($(TWHAVE_SELINUX), true)
+#		exclude += restorecon
+#	endif
+#endif
 
 # If busybox does not have restorecon, assume it does not have SELinux support.
 # Then, let toolbox provide 'ls' so -Z is available to list SELinux contexts.
@@ -661,22 +681,26 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := libaosprecovery
 LOCAL_MODULE_TAGS := eng optional
 LOCAL_CFLAGS := -std=gnu++0x
-LOCAL_SRC_FILES := adb_install.cpp asn1_decoder.cpp bootloader.cpp legacy_property_service.cpp set_metadata.cpp tw_atomic.cpp
-LOCAL_SHARED_LIBRARIES += libc liblog libcutils libmtdutils libfusesideload libselinux
+LOCAL_SRC_FILES := adb_install.cpp asn1_decoder.cpp legacy_property_service.cpp set_metadata.cpp tw_atomic.cpp installcommand.cpp
+LOCAL_SHARED_LIBRARIES += libc liblog libcutils libmtdutils libfusesideload libselinux libminzip
+LOCAL_CFLAGS += -DRECOVERY_API_VERSION=$(RECOVERY_API_VERSION)
 ifeq ($(shell test $(PLATFORM_SDK_VERSION) -lt 23; echo $$?),0)
     LOCAL_SHARED_LIBRARIES += libstdc++ libstlport
-    LOCAL_C_INCLUDES := bionic external/stlport/stlport
+    LOCAL_C_INCLUDES += bionic external/stlport/stlport
 else
     LOCAL_SHARED_LIBRARIES += libc++
 endif
 ifeq ($(shell test $(PLATFORM_SDK_VERSION) -lt 24; echo $$?),0)
     LOCAL_SHARED_LIBRARIES += libmincrypttwrp
-    LOCAL_C_INCLUDES := $(LOCAL_PATH)/libmincrypt/includes
+    LOCAL_C_INCLUDES += $(LOCAL_PATH)/libmincrypt/includes
     LOCAL_SRC_FILES += verifier24/verifier.cpp
     LOCAL_CFLAGS += -DUSE_OLD_VERIFIER
 else
-    LOCAL_SHARED_LIBRARIES += libcrypto
+    LOCAL_SHARED_LIBRARIES += libcrypto libbase
     LOCAL_SRC_FILES += verifier.cpp
+endif
+ifeq ($(AB_OTA_UPDATER),true)
+    LOCAL_CFLAGS += -DAB_OTA_UPDATER=1
 endif
 
 ifneq ($(BOARD_RECOVERY_BLDRMSG_OFFSET),)
@@ -702,6 +726,7 @@ include $(LOCAL_PATH)/tests/Android.mk \
     $(LOCAL_PATH)/tools/Android.mk \
     $(LOCAL_PATH)/edify/Android.mk \
     $(LOCAL_PATH)/otafault/Android.mk \
+    $(LOCAL_PATH)/bootloader_message/Android.mk \
     $(LOCAL_PATH)/updater/Android.mk \
     $(LOCAL_PATH)/update_verifier/Android.mk \
     $(LOCAL_PATH)/applypatch/Android.mk
@@ -759,6 +784,9 @@ endif
 ifeq ($(TW_INCLUDE_CRYPTO), true)
     include $(commands_recovery_local_path)/crypto/lollipop/Android.mk
     include $(commands_recovery_local_path)/crypto/scrypt/Android.mk
+    ifeq ($(TW_INCLUDE_CRYPTO_FBE), true)
+        include $(commands_recovery_local_path)/crypto/ext4crypt/Android.mk
+    endif
     include $(commands_recovery_local_path)/gpt/Android.mk
 endif
 ifeq ($(BUILD_ID), GINGERBREAD)

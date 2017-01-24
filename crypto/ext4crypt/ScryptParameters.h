@@ -14,22 +14,19 @@
  * limitations under the License.
  */
 
-#ifndef BOOTLOADER_MESSAGE_WRITER_H
-#define BOOTLOADER_MESSAGE_WRITER_H
+#ifndef ANDROID_VOLD_SCRYPT_PARAMETERS_H
+#define ANDROID_VOLD_SCRYPT_PARAMETERS_H
 
-#ifdef __cplusplus
-#include <string>
-#include <vector>
-
-bool clear_bootloader_message(std::string* err);
-
-bool write_bootloader_message(const std::vector<std::string>& options, std::string* err);
-
-#else
 #include <stdbool.h>
+#include <sys/cdefs.h>
 
-// C Interface.
-bool write_bootloader_message(const char* options);
+#define SCRYPT_PROP "ro.crypto.scrypt_params"
+#define SCRYPT_DEFAULTS "15:3:1"
+
+__BEGIN_DECLS
+
+bool parse_scrypt_parameters(const char* paramstr, int *Nf, int *rf, int *pf);
+
+__END_DECLS
+
 #endif
-
-#endif  // BOOTLOADER_MESSAGE_WRITER_H

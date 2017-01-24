@@ -294,7 +294,7 @@ bool MultiROM::setRomsPath(std::string loc)
 		return true;
 	}
 	*/
-	
+
 	// legacy 'loc' style for easier merges
 	loc = partition->Actual_Block_Device + " (" + partition->Current_File_System + ")";
 
@@ -465,12 +465,16 @@ bool MultiROM::restorecon(std::string name)
 	std::string seapp_contexts = file_contexts + "/boot/seapp_contexts";
 	file_contexts += "/boot/file_contexts";
 
+	if(access(file_contexts.c_str(), R_OK) < 0)
+		file_contexts += ".bin";
+
 	if(access(file_contexts.c_str(), R_OK) >= 0)
 	{
 		gui_print("Using ROM's file_contexts\n");
 		rename("/file_contexts", "/file_contexts.orig");
+		rename("/file_contexts.bin", "/file_contexts.bin.orig");
 		rename("/seapp_contexts", "/seapp_contexts.orig");
-		system_args("cp -a \"%s\" /file_contexts", file_contexts.c_str());
+		system_args("cp -a \"%s\" /%s", file_contexts.c_str(), file_contexts.substr(file_contexts.find_last_of('/')+1).c_str());
 		system_args("cp -a \"%s\" /seapp_contexts", seapp_contexts.c_str());
 		replaced_contexts = true;
 	}
@@ -481,8 +485,42 @@ bool MultiROM::restorecon(std::string name)
 	static const char * const parts[] = { "/system", "/data", "/cache", NULL };
 	for(int i = 0; parts[i]; ++i)
 	{
-		gui_print("Running restorecon on ROM's %s\n", parts[i]);
-		system_args("restorecon -RFDv %s", parts[i]);
+		gui_print("MultiROM: Running restorecon on ROM's %s\n", parts[i]);
+		#define ENV "PATH='/system/bin:/system/xbin' LD_LIBRARY_PATH='/system/lib64:/system/lib'"
+		int res = system_args("PART=%s; "
+		                      ""
+		                      "RC=$(" ENV " which restorecon); ERR=$?; "
+		                      ""
+		                      "run_restorecon() { "
+		                      "    if [ $1 == 0 ]; then "
+		                      "        BB=$(readlink $(which restorecon)); "
+		                      "    else "
+		                      "        BB=$(" ENV " readlink $RC); "
+		                      "    fi; "
+		                      ""
+		                      "    echo \"MultiROM: restorecon mode=$1 PART='$PART' RC='$RC'($ERR) BB='$BB'\"; "
+		                      ""
+		                      "    if [ \"$BB\" == \"busybox\" ]; then "
+		                      "        echo \"MultiROM: restorecon is busybox based don't use -D flag\"; "
+		                      "        if [ $1 == 0 ]; then restorecon -RFv $PART; else " ENV " restorecon -RFv $PART; fi; "
+		                      "    else "
+		                      "        echo \"MultiROM: restorecon is not busybox based use -D flag\"; "
+		                      "        if [ $1 == 0 ]; then restorecon -RFDv $PART; else " ENV " restorecon -RFDv $PART; fi; "
+		                      "    fi; "
+		                      "}; "
+		                      ""
+		                      "if [ $ERR != 0 ] || [ \"$RC\" == \"\" ]; then "
+		                      "    run_restorecon 0; "
+		                      "else "
+		                      "    run_restorecon 1; "
+		                      "fi; ", parts[i]);
+
+		if (res == 0)
+			gui_print("...successful\n");
+		else
+			gui_print("...result=%d, this may be an error\n"
+			          "   or just a non-fatal warning, you\n"
+			          "   should check the recovery.log\n", res);
 	}
 
 	// SuperSU moves the real app_process into _original
@@ -494,8 +532,9 @@ bool MultiROM::restorecon(std::string name)
 	res = true;
 exit:
 	if(replaced_contexts) {
-		rename("/file_contexts.orig", "/file_contexts");
-		rename("/seapp_contexts.orig", "/seapp_contexts");
+		if(access("/file_contexts.orig", R_OK) >= 0) rename("/file_contexts.orig", "/file_contexts"); else remove("/file_contexts");
+		if(access("/file_contexts.bin.orig", R_OK) >= 0) rename("/file_contexts.bin.orig", "/file_contexts.bin"); else remove("/file_contexts.bin");
+		if(access("/seapp_contexts.orig", R_OK) >= 0) rename("/seapp_contexts.orig", "/seapp_contexts"); else remove("/seapp_contexts");
 	}
 	return res;
 }
@@ -814,7 +853,15 @@ bool MultiROM::changeMounts(std::string name)
 		return false;
 	}
 
-	data->UnMount(true);
+	if(!data->UnMount(true))
+	{
+		gui_print("Failed to unmount real data partition, cancelling!\n");
+		m_path.clear();
+		PartitionManager.Pop_Context();
+		PartitionManager.Update_System_Details();
+		TWFunc::Toggle_MTP(mtp_was_enabled);
+		return false;
+	}
 
 	realdata = data;
 	realdata->Display_Name = "Realdata";
@@ -895,8 +942,11 @@ bool MultiROM::changeMounts(std::string name)
 	system("mv /etc/recovery.fstab /etc/recovery.fstab.bak");
 
 	// This shim prevents everything from mounting anything as read-only
+	// and also disallow mounting/unmounting of /system /data /cache
 	system("mv /sbin/mount /sbin/mount_real");
 	system("cp -a /sbin/mount_shim.sh /sbin/mount");
+	system("mv /sbin/umount /sbin/umount_real");
+	system("cp -a /sbin/umount_shim.sh /sbin/umount");
 
 	return true;
 }
@@ -918,6 +968,7 @@ void MultiROM::restoreMounts()
 	//system("mv /sbin/umount.bak /sbin/umount");
 	system("mv /etc/recovery.fstab.bak /etc/recovery.fstab");
 	system("if [ -e /sbin/mount_real ]; then mv /sbin/mount_real /sbin/mount; fi;");
+	system("if [ -e /sbin/umount_real ]; then mv /sbin/umount_real /sbin/umount; fi;");
 
 	// various versions of 'systemless root' and/or installer scripts keep the unmount, but keep the loop device, so get rid of it first
 	system("sync;"
@@ -1047,11 +1098,67 @@ bool MultiROM::createFakeSystemImg()
 		return false;
 	}
 
+	// Note: losetup -f is not always reliable, it should give the next available free loop
+	//       device, but it actually gives the next available number, even if it doesn't exist
+	#define LOSETUP_F "LOOP_DEV=$(losetup -f); if [ $? = 0 ] && [ -e $LOOP_DEV ]; then echo $LOOP_DEV; true; else false; fi;"
+
+	// First check for existence of any free loop device
 	std::string loop_device;
-	if(TWFunc::Exec_Cmd("losetup -f", loop_device) < 0)
+	if(TWFunc::Exec_Cmd(LOSETUP_F, loop_device) != 0)
 	{
 		system_args("rm \"%s/system.img\"", sysimg.c_str());
 		LOGERR("Failed to find free loop device\n");
+		return false;
+	}
+
+	// systemless SuperSU uses loop0 or loop1 only, perhaps other mods as well, so let's skip those
+	// we could actually set this to a/the highest number and let it use the last available loop device
+	// or alternatively create our own loop device like the boot.img commit
+	#define NUM_OF_LOOP_DEVICE_TO_SKIP   2
+
+	std::string skipped_loop_device[NUM_OF_LOOP_DEVICE_TO_SKIP];
+	int i = 0;
+
+	// Now try and skip N loop devices
+	int fd = creat("/tmp/skip_dummy", 0644);
+	if(fd < 0)
+	{
+		gui_print("Failed to create dummy file for loop device skips file (%s)!\n", strerror(errno));
+	}
+	else
+	{
+		close(fd);
+
+		do
+		{
+			if(TWFunc::Exec_Cmd(LOSETUP_F, skipped_loop_device[i]) != 0)
+			{
+				LOGINFO("No more free loop devices at %d\n", i);
+				skipped_loop_device[i].clear();
+				if(i > 0) // release previous loop device
+				{
+					system_args("losetup -d \"%s\"", skipped_loop_device[i-1].c_str());
+					skipped_loop_device[i-1].clear();
+				}
+				break;
+			}
+			else
+			{
+				TWFunc::trim(skipped_loop_device[i]);
+				LOGINFO("Skipping loop device %s\n", skipped_loop_device[i].c_str());
+				system_args("losetup \"%s\" /tmp/skip_dummy", skipped_loop_device[i].c_str());
+			}
+		} while(++i < NUM_OF_LOOP_DEVICE_TO_SKIP);
+		system_args("rm /tmp/skip_dummy");
+	}
+
+	// And back to the original code (the below will not fail because we tested above)
+	loop_device.clear();
+	if(TWFunc::Exec_Cmd(LOSETUP_F, loop_device) != 0)
+	{
+		system_args("rm \"%s/system.img\"", sysimg.c_str());
+		LOGERR("Failed to find free loop device\n");
+		i = NUM_OF_LOOP_DEVICE_TO_SKIP; while(i--) if(!skipped_loop_device[i].empty()) system_args("losetup -d \"%s\"", skipped_loop_device[i].c_str());
 		return false;
 	}
 
@@ -1061,8 +1168,12 @@ bool MultiROM::createFakeSystemImg()
 	{
 		system_args("rm \"%s/system.img\"", sysimg.c_str());
 		LOGERR("Failed to setup loop device!\n");
+		i = NUM_OF_LOOP_DEVICE_TO_SKIP; while(i--) if(!skipped_loop_device[i].empty()) system_args("losetup -d \"%s\"", skipped_loop_device[i].c_str());
 		return false;
 	}
+
+	// Finally release skipped loop devices
+	i = NUM_OF_LOOP_DEVICE_TO_SKIP; while(i--) if(!skipped_loop_device[i].empty()) system_args("losetup -d \"%s\"", skipped_loop_device[i].c_str());
 
 	if(system_args("mv \"%s\" \"%s-orig\" && ln -s \"%s\" \"%s\"",
 		sys->Actual_Block_Device.c_str(), sys->Actual_Block_Device.c_str(), loop_device.c_str(), sys->Actual_Block_Device.c_str()) != 0)
@@ -1379,6 +1490,7 @@ exit:
 	return false;
 }
 
+int gui_changeOverlay(std::string newPage);
 bool MultiROM::injectBoot(std::string img_path, bool only_if_older)
 {
 	int tr_my_ver = getTrampolineVersion();
@@ -1388,11 +1500,17 @@ bool MultiROM::injectBoot(std::string img_path, bool only_if_older)
 		return false;
 	}
 
+	bool res;
 	if(tr_my_ver < 17)
-		return injectBootDeprecated(img_path, only_if_older);
+		res = injectBootDeprecated(img_path, only_if_older);
+	else
+		res = (system_args("\"%s/trampoline\" --inject=\"%s\" --mrom_dir=\"%s\" %s",
+		                   m_path.c_str(), img_path.c_str(), m_path.c_str(), only_if_older ? "" : "-f") == 0);
 
-	return system_args("\"%s/trampoline\" --inject=\"%s\" --mrom_dir=\"%s\" %s",
-		m_path.c_str(), img_path.c_str(), m_path.c_str(), only_if_older ? "" : "-f") == 0;
+	if(!res)
+		gui_changeOverlay("multirom_injection_failed");
+
+	return res;
 }
 
 bool MultiROM::injectBootDeprecated(std::string img_path, bool only_if_older)
@@ -1836,7 +1954,7 @@ bool MultiROM::extractBootForROM(std::string base)
 	static const char *cp_f[] = {
 		"*.rc", "default.prop", "init", "main_init", "fstab.*",
 		// Since Android 4.3 - for SELinux
-		"file_contexts", "property_contexts", "seapp_contexts", "sepolicy",
+		"file_contexts", "file_contexts.bin", "property_contexts", "seapp_contexts", "sepolicy",
 		NULL
 	};
 
@@ -2728,15 +2846,51 @@ bool MultiROM::fakeBootPartition(const char *fakeImg)
 		system_args("dd if=\"%s\" of=\"%s\"", m_boot_dev.c_str(), fakeImg);
 		gui_print("Current boot sector was used as base for fake boot.img!\n");
 	}
+	else
+	{
+		#ifdef BOARD_BOOTIMAGE_PARTITION_SIZE
+			LOGINFO("Truncating fake boot.img to %d bytes\n", BOARD_BOOTIMAGE_PARTITION_SIZE);
+			truncate(fakeImg, BOARD_BOOTIMAGE_PARTITION_SIZE);
+		#endif
+	}
 
 	system_args("echo '%s' > /tmp/mrom_fakebootpart", m_boot_dev.c_str());
 	system_args("mv \"%s\" \"%s-orig\"", m_boot_dev.c_str(), m_boot_dev.c_str());
+	#ifndef BOARD_BOOTIMAGE_PARTITION_SIZE
 	system_args("ln -s \"%s\" \"%s\"", fakeImg, m_boot_dev.c_str());
 
-#ifdef BOARD_BOOTIMAGE_PARTITION_SIZE
-	LOGINFO("Truncating fake boot.img to %d bytes\n", BOARD_BOOTIMAGE_PARTITION_SIZE);
-	truncate(fakeImg, BOARD_BOOTIMAGE_PARTITION_SIZE);
-#endif
+	#else
+
+	#define BOOTIMG_LOOP_MINOR 222   // just chose 222 randomly
+	int major = 7;                   // MAJOR = grep loop /proc/devices
+	int minor = BOOTIMG_LOOP_MINOR;  // MINOR = non-existent /dev/block/loopN
+
+	std::string tmp;
+	if(TWFunc::Exec_Cmd("grep loop /proc/devices", tmp) != 0)
+	{
+		major = 0;
+		LOGERR("Failed to find MAJOR number for loop device driver\n");
+	}
+	else
+	{
+		tmp.erase(tmp.find("loop", 4));
+		TWFunc::trim(tmp);
+		major = atoi(tmp.c_str());
+	}
+
+	// create a new loop block device and setup loop
+	if(major && minor && (system_args("mknod \"%s\" b %d %d && losetup \"%s\" \"%s\"", m_boot_dev.c_str(), major, minor, m_boot_dev.c_str(), fakeImg) == 0))
+	{
+		gui_print("Created loop block device for boot.img!\n");
+	}
+	else
+	{
+		gui_print("Failed to create loop block device, falling back to normal symlink!\n");
+		system_args("ln -s \"%s\" \"%s\"", fakeImg, m_boot_dev.c_str());
+	}
+
+	#endif
+
 	return true;
 }
 
@@ -2756,6 +2910,15 @@ void MultiROM::restoreBootPartition()
 		return;
 	}
 
+#ifdef BOARD_BOOTIMAGE_PARTITION_SIZE
+	int minor = BOOTIMG_LOOP_MINOR;  // MINOR = non-existent /dev/block/loopN
+	std::string loob_block_device = "/dev/block/loop" + TWFunc::to_string(BOOTIMG_LOOP_MINOR);
+	if(access(loob_block_device.c_str(), R_OK) == 0)
+	{
+		system_args("losetup -d \"%s\"", m_boot_dev.c_str()); // release loop device if it's there
+		system_args("rm \"%s\"", loob_block_device.c_str());  // delete /dev/block/loopN
+	}
+#endif
 	system_args("rm \"%s\"", m_boot_dev.c_str());
 	system_args("mv \"%s\"-orig \"%s\"", m_boot_dev.c_str(), m_boot_dev.c_str());
 	remove("/tmp/mrom_fakebootpart");

@@ -540,20 +540,30 @@ void TWFunc::Update_Log_File(void) {
 		chown("/cache/recovery/log", 1000, 1000);
 		chmod("/cache/recovery/log", 0600);
 		chmod("/cache/recovery/last_log", 0640);
+	} else if (PartitionManager.Mount_By_Path("/data", false) && TWFunc::Path_Exists("/data/cache/recovery/.")) {
+		Copy_Log(TMP_LOG_FILE, "/data/cache/recovery/log");
+		copy_file("/data/cache/recovery/log", "/data/cache/recovery/last_log", 600);
+		chown("/data/cache/recovery/log", 1000, 1000);
+		chmod("/data/cache/recovery/log", 0600);
+		chmod("/data/cache/recovery/last_log", 0640);
 	} else {
-		LOGINFO("Failed to mount /cache for TWFunc::Update_Log_File\n");
+		LOGINFO("Failed to mount /cache or find /data/cache for TWFunc::Update_Log_File\n");
 	}
 
 	// Reset bootloader message
 	TWPartition* Part = PartitionManager.Find_Partition_By_Path("/misc");
 	if (Part != NULL) {
-		struct bootloader_message boot;
-		memset(&boot, 0, sizeof(boot));
-		if (set_bootloader_message(&boot) != 0)
-			LOGERR("Unable to set bootloader message.\n");
+		string err;
+		if (!clear_bootloader_message(&err)) {
+			if (err == "no misc device set") {
+				LOGINFO("%s\n", err.c_str());
+			} else {
+				LOGERR("%s\n", err.c_str());
+			}
+		}
 	}
 
-	if (PartitionManager.Mount_By_Path("/cache", true)) {
+	if (PartitionManager.Mount_By_Path("/cache", false)) {
 		if (unlink("/cache/recovery/command") && errno != ENOENT) {
 			LOGINFO("Can't unlink %s\n", "/cache/recovery/command");
 		}
@@ -838,7 +848,10 @@ string TWFunc::System_Property_Get(string Prop_Name) {
 	string propvalue;
 	if (!PartitionManager.Mount_By_Path("/system", true))
 		return propvalue;
-	if (TWFunc::read_file("/system/build.prop", buildprop) != 0) {
+	string prop_file = "/system/build.prop";
+	if (!TWFunc::Path_Exists(prop_file))
+		prop_file = "/system/system/build.prop"; // for devices with system as a root file system (e.g. Pixel)
+	if (TWFunc::read_file(prop_file, buildprop) != 0) {
 		LOGINFO("Unable to open /system/build.prop for getting '%s'.\n", Prop_Name.c_str());
 		DataManager::SetValue(TW_BACKUP_NAME, Get_Current_Date());
 		if (!mount_state)
@@ -1376,4 +1389,14 @@ unsigned long long TWFunc::IOCTL_Get_Block_Size(const char* block_device) {
 	return 0;
 }
 
+void TWFunc::copy_kernel_log(string curr_storage) {
+	std::string dmesgDst = curr_storage + "/dmesg.log";
+	std::string dmesgCmd = "/sbin/dmesg";
+
+	std::string result;
+	Exec_Cmd(dmesgCmd, result);
+	write_file(dmesgDst, result);
+	gui_msg(Msg("copy_kernel_log=Copied kernel log to {1}")(dmesgDst));
+	tw_set_default_metadata(dmesgDst.c_str());
+}
 #endif // ndef BUILD_TWRPTAR_MAIN
