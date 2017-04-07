@@ -20,6 +20,10 @@
 #include <errno.h>
 #include <utime.h>
 
+#include <sys/capability.h>
+#include <sys/xattr.h>
+#include <linux/xattr.h>
+
 #ifdef STDC_HEADERS
 # include <stdlib.h>
 #endif
@@ -28,13 +32,12 @@
 # include <unistd.h>
 #endif
 
-#ifdef HAVE_SELINUX
-# include "selinux/selinux.h"
-#endif
+#include <selinux/selinux.h>
 
 #ifdef HAVE_EXT4_CRYPT
 # include "ext4crypt_tar.h"
 #endif
+#include "android_utils.h"
 
 const unsigned long long progress_size = (unsigned long long)(T_BLOCKSIZE);
 
@@ -155,7 +158,6 @@ tar_extract_file(TAR *t, const char *realname, const char *prefix, const int *pr
 		return i;
 	}
 
-#ifdef HAVE_SELINUX
 	if((t->options & TAR_STORE_SELINUX) && t->th_buf.selinux_context != NULL)
 	{
 #ifdef DEBUG
@@ -164,7 +166,16 @@ tar_extract_file(TAR *t, const char *realname, const char *prefix, const int *pr
 		if (lsetfilecon(realname, t->th_buf.selinux_context) < 0)
 			fprintf(stderr, "tar_extract_file(): failed to restore SELinux context %s to file %s !!!\n", t->th_buf.selinux_context, realname);
 	}
+
+	if((t->options & TAR_STORE_POSIX_CAP) && t->th_buf.has_cap_data)
+	{
+#if 1 //def DEBUG
+		printf("tar_extract_file(): restoring posix capabilities to file %s\n", realname);
+		print_caps(&t->th_buf.cap_data);
 #endif
+		if (setxattr(realname, XATTR_NAME_CAPS, &t->th_buf.cap_data, sizeof(struct vfs_cap_data), 0) < 0)
+			fprintf(stderr, "tar_extract_file(): failed to restore posix capabilities to file %s !!!\n", realname);
+	}
 
 #ifdef LIBTAR_FILE_HASH
 	pn = th_get_pathname(t);
@@ -459,7 +470,6 @@ tar_extract_blockdev(TAR *t, const char *realname)
 	return 0;
 }
 
-
 /* directory */
 int
 tar_extract_dir(TAR *t, const char *realname)
@@ -508,6 +518,33 @@ tar_extract_dir(TAR *t, const char *realname)
 			perror("mkdir()");
 #endif
 			return -1;
+		}
+	}
+
+	if (t->options & TAR_STORE_ANDROID_USER_XATTR)
+	{
+		if (t->th_buf.has_user_default) {
+#if 1 //def DEBUG
+			printf("tar_extract_file(): restoring android user.default xattr to %s\n", realname);
+#endif
+			if (setxattr(realname, "user.default", NULL, 0, 0) < 0) {
+				fprintf(stderr, "tar_extract_file(): failed to restore android user.default to file %s !!!\n", realname);
+				return -1;
+			}
+		}
+		if (t->th_buf.has_user_cache) {
+#if 1 //def DEBUG
+			printf("tar_extract_file(): restoring android user.inode_cache xattr to %s\n", realname);
+#endif
+			if (write_path_inode(realname, "cache", "user.inode_cache"))
+				return -1;
+		}
+		if (t->th_buf.has_user_code_cache) {
+#if 1 //def DEBUG
+			printf("tar_extract_file(): restoring android user.inode_code_cache xattr to %s\n", realname);
+#endif
+			if (write_path_inode(realname, "code_cache", "user.inode_code_cache"))
+				return -1;
 		}
 	}
 

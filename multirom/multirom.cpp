@@ -592,6 +592,8 @@ void MultiROM::deinitBackup()
 	DataManager::SetValue("multirom_do_backup", 0);
 	DataManager::SetValue("multirom_rom_name_title", 0);
 
+	DataManager::SetValue("tw_backup_name", DataManager::GetStrValue("tw_main_backup_name"));
+
 	if(hadInternalStorage)
 	{
 		TWPartition *data = PartitionManager.Find_Partition_By_Path("/data");
@@ -3372,7 +3374,8 @@ std::string MultiROM::getRecoveryVersion()
 	hdr.name[BOOT_NAME_SIZE-1] = 0; // to be sure
 
 	if (strncmp((char*)hdr.name, "mrom", 4) != 0 ||
-		strlen((char*)hdr.name) != sizeof("mromYYYYMMDD-PP")-1)
+		(strlen((char*)hdr.name) != sizeof("mromYYYYMMDD-PP")-1 &&
+		strlen((char*)hdr.name) != sizeof("mromYYYYMMDD")-1))
 	{
 		return std::string();
 	}

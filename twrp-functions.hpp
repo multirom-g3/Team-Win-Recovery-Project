@@ -42,9 +42,7 @@ enum Archive_Type {
 };
 
 #ifdef TARGET_RECOVERY_IS_MULTIROM
-#ifdef HAVE_SELINUX
 struct selabel_handle;
-#endif
 #endif //TARGET_RECOVERY_IS_MULTIROM
 
 // Partition class
@@ -61,6 +59,7 @@ public:
 	static int Exec_Cmd_Show_Output(const string& cmd);
 #endif //TARGET_RECOVERY_IS_MULTIROM
 	static int Wait_For_Child(pid_t pid, int *status, string Child_Name);       // Waits for pid to exit and checks exit status
+	static int Wait_For_Child_Timeout(pid_t pid, int *status, const string& Child_Name, int timeout); // Waits for a pid to exit until the timeout is hit. If timeout is hit, kill the chilld.
 	static bool Path_Exists(string Path);                                       // Returns true if the path exists
 	static Archive_Type Get_File_Type(string fn);                               // Determines file type, 0 for unknown, 1 for gzip, 2 for OAES encrypted
 	static int Try_Decrypting_File(string fn, string password); // -1 for some error, 0 for failed to decrypt, 1 for decrypted, 3 for decrypted and found gzip format
@@ -115,9 +114,7 @@ public:
 	static void stringReplace(std::string& str, char before, char after);
 	static void trim(std::string& str);
 	static int64_t getFreeSpace(const std::string& path);
-#ifdef HAVE_SELINUX
 	static bool restorecon(const std::string& path, struct selabel_handle *sh);
-#endif
 #endif //TARGET_RECOVERY_IS_MULTIROM
 	static unsigned long long IOCTL_Get_Block_Size(const char* block_device);
 	static void copy_kernel_log(string curr_storage); // Copy Kernel Log to Current Storage (PSTORE/KMSG)

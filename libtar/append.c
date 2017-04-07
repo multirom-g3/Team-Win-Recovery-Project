@@ -22,6 +22,10 @@
 #include <sys/types.h>
 #include <stdbool.h>
 
+#include <sys/capability.h>
+#include <sys/xattr.h>
+#include <linux/xattr.h>
+
 #ifdef STDC_HEADERS
 # include <stdlib.h>
 # include <string.h>
@@ -31,13 +35,12 @@
 # include <unistd.h>
 #endif
 
-#ifdef HAVE_SELINUX
-# include "selinux/selinux.h"
-#endif
+#include <selinux/selinux.h>
 
 #ifdef HAVE_EXT4_CRYPT
 # include "ext4crypt_tar.h"
 #endif
+#include "android_utils.h"
 
 struct tar_dev
 {
@@ -101,7 +104,6 @@ tar_append_file(TAR *t, const char *realname, const char *savename)
 #endif
 	th_set_path(t, (savename ? savename : realname));
 
-#ifdef HAVE_SELINUX
 	/* get selinux context */
 	if (t->options & TAR_STORE_SELINUX)
 	{
@@ -125,7 +127,6 @@ tar_append_file(TAR *t, const char *realname, const char *savename)
 #endif
 		}
 	}
-#endif
 
 #ifdef HAVE_EXT4_CRYPT
 	if (TH_ISDIR(t) && t->options & TAR_STORE_EXT4_POL)
@@ -153,6 +154,50 @@ tar_append_file(TAR *t, const char *realname, const char *savename)
 		} // else no policy found, but this is not an error as not all dirs will have a policy
 	}
 #endif
+
+	/* get posix file capabilities */
+	if (TH_ISREG(t) && t->options & TAR_STORE_POSIX_CAP)
+	{
+		if (t->th_buf.has_cap_data)
+		{
+			memset(&t->th_buf.cap_data, 0, sizeof(struct vfs_cap_data));
+			t->th_buf.has_cap_data = 0;
+		}
+
+		if (getxattr(realname, XATTR_NAME_CAPS, &t->th_buf.cap_data, sizeof(struct vfs_cap_data)) >= 0)
+		{
+			t->th_buf.has_cap_data = 1;
+#if 1 //def DEBUG
+			print_caps(&t->th_buf.cap_data);
+#endif
+		}
+	}
+
+	/* get android user.default xattr */
+	if (TH_ISDIR(t) && t->options & TAR_STORE_ANDROID_USER_XATTR)
+	{
+		if (getxattr(realname, "user.default", NULL, 0) >= 0)
+		{
+			t->th_buf.has_user_default = 1;
+#if 1 //def DEBUG
+			printf("storing xattr user.default\n");
+#endif
+		}
+		if (getxattr(realname, "user.inode_cache", NULL, 0) >= 0)
+		{
+			t->th_buf.has_user_cache = 1;
+#if 1 //def DEBUG
+			printf("storing xattr user.inode_cache\n");
+#endif
+		}
+		if (getxattr(realname, "user.inode_code_cache", NULL, 0) >= 0)
+		{
+			t->th_buf.has_user_code_cache = 1;
+#if 1 //def DEBUG
+			printf("storing xattr user.inode_code_cache\n");
+#endif
+		}
+	}
 
 	/* check if it's a hardlink */
 #ifdef DEBUG

@@ -42,6 +42,12 @@ using namespace rapidxml;
 #ifndef TW_Y_OFFSET
 #define TW_Y_OFFSET 0
 #endif
+#ifndef TW_W_OFFSET
+#define TW_W_OFFSET 0
+#endif
+#ifndef TW_H_OFFSET
+#define TW_H_OFFSET 0
+#endif
 
 class RenderObject
 {
@@ -398,6 +404,7 @@ protected:
 	int system_image_upgrader(std::string arg);
 #endif //TARGET_RECOVERY_IS_MULTIROM
 	int setlanguage(std::string arg);
+	int togglebacklight(std::string arg);
 	int twcmd(std::string arg);
 	int setbootslot(std::string arg);
 	int installapp(std::string arg);
@@ -788,7 +795,9 @@ public:
 	virtual size_t GetItemCount();
 	virtual void RenderItem(size_t itemindex, int yPos, bool selected);
 	virtual void NotifySelect(size_t item_selected);
+
 	static void Translate_Now();
+	static void Clear_For_Retranslation();
 protected:
 	enum SlideoutState
 	{
@@ -1277,8 +1286,6 @@ COLOR LoadAttrColor(xml_node<>* element, const char* attrname, COLOR defaultvalu
 FontResource* LoadAttrFont(xml_node<>* element, const char* attrname);
 ImageResource* LoadAttrImage(xml_node<>* element, const char* attrname);
 AnimationResource* LoadAttrAnimation(xml_node<>* element, const char* attrname);
-
 bool LoadPlacement(xml_node<>* node, int* x, int* y, int* w = NULL, int* h = NULL, Placement* placement = NULL);
 
 #endif  // _OBJECTS_HEADER
-
