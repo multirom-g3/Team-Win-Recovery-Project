@@ -472,10 +472,17 @@ bool MultiROM::restorecon(std::string name)
 {
 	bool res = false;
 	bool replaced_contexts = false;
+	bool o_replaced_contexts = false;
 
 	std::string file_contexts = getRomsPath() + name;
 	std::string seapp_contexts = file_contexts + "/boot/seapp_contexts";
 	file_contexts += "/boot/file_contexts";
+
+	std::string o_plat_file_contexts = getRomsPath() + name;
+	std::string o_plat_seapp_contexts = o_plat_file_contexts + "/boot/plat_seapp_contexts";
+	std::string o_nonplat_file_contexts = o_plat_file_contexts + "/boot/nonplat_file_contexts";
+	std::string o_nonplat_seapp_contexts = o_plat_file_contexts + "/boot/nonplat_seapp_contexts";
+	o_plat_file_contexts += "/boot/plat_file_contexts";
 
 	if(access(file_contexts.c_str(), R_OK) < 0)
 		file_contexts += ".bin";
@@ -489,6 +496,19 @@ bool MultiROM::restorecon(std::string name)
 		system_args("cp -a \"%s\" /%s", file_contexts.c_str(), file_contexts.substr(file_contexts.find_last_of('/')+1).c_str());
 		system_args("cp -a \"%s\" /seapp_contexts", seapp_contexts.c_str());
 		replaced_contexts = true;
+	}
+	else if(access(o_plat_file_contexts.c_str(), R_OK) >= 0)
+	{
+		gui_print("Using ROM's file_contexts\n");
+		rename("/plat_file_contexts", "/plat_file_contexts.orig");
+		rename("/plat_seapp_contexts", "/plat_seapp_contexts.orig");
+		rename("/nonplat_file_contexts", "/nonplat_file_contexts.orig");
+		rename("/nonplat_seapp_contexts", "/nonplat_seapp_contexts.orig");
+		system_args("cp -a \"%s\" /plat_file_contexts", o_plat_file_contexts.c_str());
+		system_args("cp -a \"%s\" /plat_seapp_contexts", o_plat_seapp_contexts.c_str());
+		system_args("cp -a \"%s\" /nonplat_file_contexts", o_nonplat_file_contexts.c_str());
+		system_args("cp -a \"%s\" /nonplat_seapp_contexts", o_nonplat_seapp_contexts.c_str());
+		o_replaced_contexts = true;
 	}
 
 	if(!changeMounts(name))
@@ -547,6 +567,11 @@ exit:
 		if(access("/file_contexts.orig", R_OK) >= 0) rename("/file_contexts.orig", "/file_contexts"); else remove("/file_contexts");
 		if(access("/file_contexts.bin.orig", R_OK) >= 0) rename("/file_contexts.bin.orig", "/file_contexts.bin"); else remove("/file_contexts.bin");
 		if(access("/seapp_contexts.orig", R_OK) >= 0) rename("/seapp_contexts.orig", "/seapp_contexts"); else remove("/seapp_contexts");
+	} else if(o_replaced_contexts) {
+		if(access("/plat_file_contexts.orig", R_OK) >= 0) rename("/plat_file_contexts.orig", "/plat_file_contexts"); else remove("/plat_file_contexts");
+		if(access("/plat_seapp_contexts.orig", R_OK) >= 0) rename("/plat_seapp_contexts.orig", "/plat_seapp_contexts"); else remove("/plat_seapp_contexts");
+		if(access("/nonplat_file_contexts.orig", R_OK) >= 0) rename("/nonplat_file_contexts.orig", "/nonplat_file_contexts"); else remove("/nonplat_file_contexts");
+		if(access("/nonplat_seapp_contexts.orig", R_OK) >= 0) rename("/nonplat_seapp_contexts.orig", "/nonplat_seapp_contexts"); else remove("/nonplat_seapp_contexts");
 	}
 	return res;
 }
@@ -2183,6 +2208,8 @@ bool MultiROM::extractBootForROM(std::string base)
 		"*.rc", "default.prop", "init", "main_init", "fstab.*",
 		// Since Android 4.3 - for SELinux
 		"file_contexts", "file_contexts.bin", "property_contexts", "seapp_contexts", "sepolicy",
+		// Since Android 8.0 - for SELinux
+		"plat_file_contexts", "plat_seapp_contexts", "nonplat_file_contexts", "nonplat_seapp_contexts",
 		NULL
 	};
 
